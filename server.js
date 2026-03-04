@@ -4,7 +4,6 @@ const cors = require('cors');
 const app = express();
 
 // Middleware
-
 app.use(cors({
   origin: [
     'https://location-url.vercel.app'
@@ -58,11 +57,67 @@ async function sendWithRetry(url, payload, headers, retries = MAX_RETRIES) {
   }
 }
 
-// 📝 Update AppSheet with location data
+// 📝 Find the most recent Order ID by Contact Number
+async function findOrderByContact(phone) {
+  try {
+    console.log(`🔍 Searching for order with contact: ${phone}`);
+    
+    const payload = {
+      Action: "Find",
+      Properties: {
+        Locale: "en-US",
+        Selector: `ORDERBY(Filter(Orders, [Contact] = "${phone}"), [Order Date], TRUE)`
+      },
+      Rows: []
+    };
+
+    const response = await axios.post(
+      `${APPSHEET_CONFIG.API_URL}/${APPSHEET_CONFIG.APP_ID}/tables/${APPSHEET_CONFIG.TABLE_NAME}/Action`,
+      payload,
+      {
+        headers: {
+          'ApplicationAccessKey': APPSHEET_CONFIG.APP_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log("🔍 Find response:", JSON.stringify(response.data, null, 2));
+    
+    if (response.data && response.data.Rows && response.data.Rows.length > 0) {
+      const orders = response.data.Rows;
+      const mostRecentOrder = orders[orders.length - 1]; // Last item = most recent
+      
+      console.log(`✅ Found ${orders.length} order(s) for contact ${phone}`);
+      console.log(`📦 Using most recent Order ID: ${mostRecentOrder['Order ID']}`);
+      
+      return mostRecentOrder;
+    }
+    
+    console.log(`⚠️ No orders found for contact ${phone}`);
+    return null;
+  } catch (error) {
+    console.error("❌ Failed to find order:", error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// 📝 Update AppSheet with location data (FIXED VERSION)
 async function updateAppSheetLocation(phone, locationUrl, latitude, longitude) {
   try {
     console.log(`📍 Updating AppSheet for phone: ${phone}`);
     
+    // First, find the order by contact number to get the Order ID
+    const orderRecord = await findOrderByContact(phone);
+    
+    if (!orderRecord) {
+      throw new Error(`No order found for contact ${phone}. Cannot update location.`);
+    }
+    
+    const orderId = orderRecord['Order ID'];
+    console.log(`✅ Found Order ID: ${orderId}`);
+    
+    // Now update with the Order ID included
     const payload = {
       Action: "Edit",
       Properties: {
@@ -70,6 +125,7 @@ async function updateAppSheetLocation(phone, locationUrl, latitude, longitude) {
         Timezone: "Asia/Kolkata"
       },
       Rows: [{
+        "Order ID": orderId,  // PRIMARY KEY - REQUIRED!
         Contact: phone,
         LocationURL: locationUrl,
         Latitude: latitude,
@@ -258,6 +314,7 @@ app.post("/receive-location", async (req, res) => {
         success: true,
         warning: "Location received but AppSheet update failed",
         message: "Location data has been logged. Manual update may be required.",
+        error: appSheetError.message,
         data: {
           phone,
           googleMapsUrl,
@@ -285,15 +342,35 @@ app.get("/location-status/:phone", async (req, res) => {
   
   console.log(`🔍 Checking location status for: ${phone}`);
   
-  // In a real application, you would query your database
-  // For now, we'll return a basic response
-  
-  res.json({
-    success: true,
-    phone: phone,
-    message: "Location status check endpoint",
-    note: "Implement database query to check if location has been received"
-  });
+  try {
+    const order = await findOrderByContact(phone);
+    
+    if (order) {
+      res.json({
+        success: true,
+        phone: phone,
+        orderFound: true,
+        orderId: order['Order ID'],
+        hasLocation: !!order.LocationURL,
+        locationUrl: order.LocationURL || null,
+        latitude: order.Latitude || null,
+        longitude: order.Longitude || null
+      });
+    } else {
+      res.json({
+        success: true,
+        phone: phone,
+        orderFound: false,
+        message: "No order found for this phone number"
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to check location status",
+      details: error.message
+    });
+  }
 });
 
 // 🏥 Health check endpoint
@@ -354,7 +431,7 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log("🚀 ===============================================");
   console.log(`🚀 Sri Navata Agencies Server Started`);
   console.log(`🚀 Port: ${PORT}`);
