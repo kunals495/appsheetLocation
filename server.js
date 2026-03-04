@@ -16,11 +16,11 @@ app.use(express.static('public')); // Serve static HTML files
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000; // 2 seconds
 
-// AppSheet Configuration (Replace with your actual values)
+// AppSheet Configuration
 const APPSHEET_CONFIG = {
   APP_ID: '4457f822-c19e-41a7-8789-948186d4a4de',
   APP_KEY: 'V2-sWnep-IOv7C-E5H7a-j9Xwv-vDyM0-klGZM-PFQrd-Qc7zE',
-  TABLE_NAME: 'Orders', // Your orders table name
+  TABLE_NAME: 'Orders',
   API_URL: 'https://api.appsheet.com/api/v2/apps'
 };
 
@@ -30,7 +30,7 @@ const HTML_PAGE_URL = 'https://location-url.vercel.app/';
 // WhatsApp API Configuration
 const WHATSAPP_API = {
   URL: 'https://messagesapi.co.in/chat/sendMessage',
-  ACCOUNT_ID: '6c486918d7554752954be04b6f4fb627', // Your account ID
+  ACCOUNT_ID: '6c486918d7554752954be04b6f4fb627',
   ACCOUNT_NAME: 'office'
 };
 
@@ -46,7 +46,6 @@ async function sendWithRetry(url, payload, headers, retries = MAX_RETRIES) {
     const status = error.response?.status;
     console.error("⚠️ API Error Status:", status || "No response");
     
-    // Retry only if no response (network issue) or 5xx error (server issue)
     if (retries > 0 && (!status || status >= 500)) {
       console.log(`🔁 Retrying in ${RETRY_DELAY / 1000} seconds...`);
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
@@ -57,159 +56,10 @@ async function sendWithRetry(url, payload, headers, retries = MAX_RETRIES) {
   }
 }
 
-// 📝 Find ALL orders and filter by contact (more reliable approach)
-async function findOrderByContact(phone) {
+// 📝 Update AppSheet with Order ID directly
+async function updateAppSheetLocationByOrderId(orderId, locationUrl, latitude, longitude) {
   try {
-    console.log(`🔍 Searching for order with contact: ${phone}`);
-    
-    // Try multiple approaches to find the order
-    
-    // Approach 1: Use Find action with simple filter
-    let payload = {
-      Action: "Find",
-      Properties: {
-        Locale: "en-US",
-        Selector: `SELECT(Orders[Order ID], [Contact] = "${phone}")`
-      },
-      Rows: []
-    };
-
-    let response = await axios.post(
-      `${APPSHEET_CONFIG.API_URL}/${APPSHEET_CONFIG.APP_ID}/tables/${APPSHEET_CONFIG.TABLE_NAME}/Action`,
-      payload,
-      {
-        headers: {
-          'ApplicationAccessKey': APPSHEET_CONFIG.APP_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log("🔍 Find response (Approach 1):", JSON.stringify(response.data, null, 2));
-    
-    if (response.data && response.data.Rows && response.data.Rows.length > 0) {
-      const orders = response.data.Rows;
-      const mostRecentOrder = orders[orders.length - 1];
-      
-      console.log(`✅ Found ${orders.length} order(s) for contact ${phone}`);
-      console.log(`📦 Using most recent Order ID: ${mostRecentOrder['Order ID']}`);
-      
-      return mostRecentOrder;
-    }
-    
-    // Approach 2: If first approach fails, try reading all and filtering locally
-    console.log("⚠️ Approach 1 failed, trying Approach 2: Read all orders...");
-    
-    payload = {
-      Action: "Find",
-      Properties: {
-        Locale: "en-US",
-        Selector: "SELECT(Orders[Order ID])"
-      },
-      Rows: []
-    };
-
-    response = await axios.post(
-      `${APPSHEET_CONFIG.API_URL}/${APPSHEET_CONFIG.APP_ID}/tables/${APPSHEET_CONFIG.TABLE_NAME}/Action`,
-      payload,
-      {
-        headers: {
-          'ApplicationAccessKey': APPSHEET_CONFIG.APP_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log("🔍 Find response (Approach 2):", JSON.stringify(response.data, null, 2));
-    
-    if (response.data && response.data.Rows && response.data.Rows.length > 0) {
-      const allOrders = response.data.Rows;
-      
-      // Filter locally by phone number
-      const matchingOrders = allOrders.filter(order => {
-        const orderContact = order.Contact || order.contact;
-        return orderContact === phone || orderContact === `91${phone}` || orderContact === phone.replace(/^91/, '');
-      });
-      
-      if (matchingOrders.length > 0) {
-        // Sort by date and get most recent
-        matchingOrders.sort((a, b) => {
-          const dateA = new Date(a['Order Date'] || a['Order_Date'] || 0);
-          const dateB = new Date(b['Order Date'] || b['Order_Date'] || 0);
-          return dateB - dateA;
-        });
-        
-        const mostRecentOrder = matchingOrders[0];
-        console.log(`✅ Found ${matchingOrders.length} order(s) for contact ${phone} (filtered locally)`);
-        console.log(`📦 Using most recent Order ID: ${mostRecentOrder['Order ID']}`);
-        
-        return mostRecentOrder;
-      }
-    }
-    
-    console.log(`⚠️ No orders found for contact ${phone}`);
-    return null;
-  } catch (error) {
-    console.error("❌ Failed to find order:", error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// 📝 Update AppSheet with location data (FIXED VERSION)
-async function updateAppSheetLocation(phone, locationUrl, latitude, longitude) {
-  try {
-    console.log(`📍 Updating AppSheet for phone: ${phone}`);
-    
-    // First, find the order by contact number to get the Order ID
-    const orderRecord = await findOrderByContact(phone);
-    
-    if (!orderRecord) {
-      throw new Error(`No order found for contact ${phone}. Cannot update location.`);
-    }
-    
-    const orderId = orderRecord['Order ID'];
-    console.log(`✅ Found Order ID: ${orderId}`);
-    
-    // Now update with the Order ID included
-    const payload = {
-      Action: "Edit",
-      Properties: {
-        Locale: "en-US",
-        Timezone: "Asia/Kolkata"
-      },
-      Rows: [{
-        "Order ID": orderId,  // PRIMARY KEY - REQUIRED!
-        Contact: phone,
-        LocationURL: locationUrl,
-        Latitude: latitude,
-        Longitude: longitude,
-        LocationReceived: new Date().toISOString()
-      }]
-    };
-
-    const response = await axios.post(
-      `${APPSHEET_CONFIG.API_URL}/${APPSHEET_CONFIG.APP_ID}/tables/${APPSHEET_CONFIG.TABLE_NAME}/Action`,
-      payload,
-      {
-        headers: {
-          'ApplicationAccessKey': APPSHEET_CONFIG.APP_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log("✅ AppSheet updated successfully:", response.data);
-    return response.data;
-  } catch (error) {
-    console.error("❌ Failed to update AppSheet:", error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// 📝 Update AppSheet with Order ID directly (no search needed)
-async function updateAppSheetLocationDirect(orderId, phone, locationUrl, latitude, longitude) {
-  try {
-    console.log(`📍 Updating AppSheet Order ID: ${orderId} directly`);
+    console.log(`📍 Updating AppSheet Order ID: ${orderId}`);
     
     const payload = {
       Action: "Edit",
@@ -218,8 +68,7 @@ async function updateAppSheetLocationDirect(orderId, phone, locationUrl, latitud
         Timezone: "Asia/Kolkata"
       },
       Rows: [{
-        "Order ID": orderId,  // PRIMARY KEY
-        Contact: phone,
+        "Order ID": orderId,
         LocationURL: locationUrl,
         Latitude: latitude,
         Longitude: longitude,
@@ -264,7 +113,7 @@ function formatOrderItems(orderData) {
 
 // ==================== ENDPOINTS ====================
 
-// 📨 Original endpoint: Send order confirmation with location link
+// 📨 Send order confirmation with location link
 app.post("/send-message", async (req, res) => {
   console.log("📩 New order request received at /send-message");
   console.log("🕒 Time:", new Date().toISOString());
@@ -273,40 +122,39 @@ app.post("/send-message", async (req, res) => {
   try {
     const orderData = req.body;
     
-    // Handle both possible field name formats
+    // Extract data from request
     const customerPhone = orderData.Contact || orderData.phone;
     const customerName = orderData['Customer Name'] || orderData.customerName || orderData.name;
-    const orderId = orderData['Order ID'] || orderData.orderId || orderData.OrderID;
+    const orderId = orderData.orderid || orderData['Order ID'] || orderData.orderId || orderData.OrderID;
     
     // Validate required fields
-    if (!customerPhone || !customerName) {
+    if (!customerPhone || !customerName || !orderId) {
       console.log("❌ Missing required fields");
       console.log("Available fields:", Object.keys(orderData));
       return res.status(400).json({ 
         success: false,
-        error: "Missing required fields: Contact or Customer Name",
+        error: "Missing required fields: Contact, Customer Name, or Order ID",
         receivedFields: Object.keys(orderData)
       });
     }
 
+    console.log(`📦 Order ID: ${orderId}`);
+    console.log(`📱 Customer Phone: ${customerPhone}`);
+    console.log(`👤 Customer Name: ${customerName}`);
+
     const orderItems = formatOrderItems(orderData);
     
-    // Create location tracking URL with phone number AND order ID (if available)
-    let locationTrackingUrl;
-    if (orderId) {
-      locationTrackingUrl = `${HTML_PAGE_URL}?phone=${encodeURIComponent(customerPhone)}&orderId=${encodeURIComponent(orderId)}`;
-      console.log(`📦 Including Order ID in URL: ${orderId}`);
-    } else {
-      locationTrackingUrl = `${HTML_PAGE_URL}?phone=${encodeURIComponent(customerPhone)}`;
-      console.log(`⚠️ No Order ID provided, using phone only`);
-    }
+    // Create location tracking URL with Order ID
+    const locationTrackingUrl = `${HTML_PAGE_URL}?orderId=${encodeURIComponent(orderId)}`;
 
     // Build WhatsApp message
     const message = `Hello ${customerName},
 
 Thanks for placing order with Sri Navata Agencies. 
 
-📋 Your order:
+📋 Your Order ID: ${orderId}
+
+Your order:
 ${orderItems}
 
 📍 *IMPORTANT: Share Your Delivery Location*
@@ -350,7 +198,7 @@ Thank you! 🙏`;
       success: true,
       message: "Order confirmation sent with location tracking link",
       locationUrl: locationTrackingUrl,
-      orderId: orderId || 'not provided',
+      orderId: orderId,
       data: response.data
     });
 
@@ -366,42 +214,34 @@ Thank you! 🙏`;
   }
 });
 
-// 📍 NEW ENDPOINT: Receive location from HTML page
+// 📍 Receive location from HTML page
 app.post("/receive-location", async (req, res) => {
   console.log("📍 Location data received at /receive-location");
   console.log("🕒 Time:", new Date().toISOString());
   console.log("📦 Request Body:", JSON.stringify(req.body, null, 2));
 
   try {
-    const { phone, orderId, location, googleMapsUrl, timestamp, userAgent, timezone } = req.body;
+    const { orderId, location, googleMapsUrl, timestamp, userAgent, timezone } = req.body;
 
     // Validate required fields
-    if (!phone || !location || !googleMapsUrl) {
+    if (!orderId || !location || !googleMapsUrl) {
       console.log("❌ Missing required fields");
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: phone, location, or googleMapsUrl"
+        error: "Missing required fields: orderId, location, or googleMapsUrl"
       });
     }
 
     const { latitude, longitude, accuracy } = location;
 
-    console.log(`📱 Customer Phone: ${phone}`);
-    console.log(`📦 Order ID: ${orderId || 'Not provided'}`);
+    console.log(`📦 Order ID: ${orderId}`);
     console.log(`🌍 Location: ${latitude}, ${longitude}`);
     console.log(`🎯 Accuracy: ±${accuracy}m`);
     console.log(`🗺️ Google Maps URL: ${googleMapsUrl}`);
 
     // Update AppSheet with location data
     try {
-      // If orderId is provided, use it directly. Otherwise, search by phone
-      if (orderId) {
-        console.log(`✅ Order ID provided: ${orderId}, updating directly`);
-        await updateAppSheetLocationDirect(orderId, phone, googleMapsUrl, latitude, longitude);
-      } else {
-        console.log(`⚠️ No Order ID provided, searching by phone number`);
-        await updateAppSheetLocation(phone, googleMapsUrl, latitude, longitude);
-      }
+      await updateAppSheetLocationByOrderId(orderId, googleMapsUrl, latitude, longitude);
       
       console.log("✅ Location successfully stored in AppSheet");
       
@@ -409,8 +249,7 @@ app.post("/receive-location", async (req, res) => {
         success: true,
         message: "Location received and stored successfully",
         data: {
-          phone,
-          orderId: orderId || 'searched by phone',
+          orderId,
           googleMapsUrl,
           latitude,
           longitude,
@@ -419,7 +258,6 @@ app.post("/receive-location", async (req, res) => {
       });
 
     } catch (appSheetError) {
-      // Even if AppSheet update fails, acknowledge receipt
       console.error("⚠️ AppSheet update failed, but location was received");
       
       res.json({
@@ -428,7 +266,6 @@ app.post("/receive-location", async (req, res) => {
         message: "Location data has been logged. Manual update may be required.",
         error: appSheetError.message,
         data: {
-          phone,
           orderId,
           googleMapsUrl,
           latitude,
@@ -449,34 +286,55 @@ app.post("/receive-location", async (req, res) => {
   }
 });
 
-// 🔍 Endpoint to check location status for a phone number
-app.get("/location-status/:phone", async (req, res) => {
-  const phone = req.params.phone;
+// 🔍 Endpoint to check location status for an order ID
+app.get("/location-status/:orderId", async (req, res) => {
+  const orderId = req.params.orderId;
   
-  console.log(`🔍 Checking location status for: ${phone}`);
+  console.log(`🔍 Checking location status for Order ID: ${orderId}`);
   
   try {
-    const order = await findOrderByContact(phone);
-    
-    if (order) {
+    // Query AppSheet for this order
+    const payload = {
+      Action: "Find",
+      Properties: {
+        Locale: "en-US",
+        Selector: `SELECT(Orders[Order ID], [Order ID] = "${orderId}")`
+      },
+      Rows: []
+    };
+
+    const response = await axios.post(
+      `${APPSHEET_CONFIG.API_URL}/${APPSHEET_CONFIG.APP_ID}/tables/${APPSHEET_CONFIG.TABLE_NAME}/Action`,
+      payload,
+      {
+        headers: {
+          'ApplicationAccessKey': APPSHEET_CONFIG.APP_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (response.data && response.data.Rows && response.data.Rows.length > 0) {
+      const order = response.data.Rows[0];
+      
       res.json({
         success: true,
-        phone: phone,
         orderFound: true,
         orderId: order['Order ID'],
         customerName: order['Customer Name'],
+        contact: order['Contact'],
         orderDate: order['Order Date'],
         hasLocation: !!order.LocationURL,
         locationUrl: order.LocationURL || null,
         latitude: order.Latitude || null,
-        longitude: order.Longitude || null
+        longitude: order.Longitude || null,
+        locationReceived: order.LocationReceived || null
       });
     } else {
       res.json({
         success: true,
-        phone: phone,
         orderFound: false,
-        message: "No order found for this phone number"
+        message: "No order found with this Order ID"
       });
     }
   } catch (error) {
@@ -497,7 +355,7 @@ app.get("/health", (req, res) => {
     endpoints: {
       sendMessage: "/send-message",
       receiveLocation: "/receive-location",
-      locationStatus: "/location-status/:phone"
+      locationStatus: "/location-status/:orderId"
     }
   });
 });
@@ -506,15 +364,15 @@ app.get("/health", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     service: "Sri Navata Agencies - Order Location Tracker",
-    version: "2.1",
+    version: "3.0",
     status: "running",
     endpoints: {
       health: "GET /health",
       sendMessage: "POST /send-message",
       receiveLocation: "POST /receive-location",
-      locationStatus: "GET /location-status/:phone"
+      locationStatus: "GET /location-status/:orderId"
     },
-    documentation: "See README.md for API documentation"
+    documentation: "Now uses Order ID as primary identifier"
   });
 });
 
@@ -558,7 +416,7 @@ const server = app.listen(PORT, () => {
   console.log(`   GET  http://localhost:${PORT}/health`);
   console.log(`   POST http://localhost:${PORT}/send-message`);
   console.log(`   POST http://localhost:${PORT}/receive-location`);
-  console.log(`   GET  http://localhost:${PORT}/location-status/:phone`);
+  console.log(`   GET  http://localhost:${PORT}/location-status/:orderId`);
   console.log("");
   console.log("⚡ Server is ready to accept requests!");
   console.log("🚀 ===============================================");
