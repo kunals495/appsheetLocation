@@ -3,6 +3,12 @@ const axios = require("axios");
 const app = express();
 
 // Middleware
+
+app.use(cors({
+  origin: [
+    'https://location-url.vercel.app'
+  ],
+}));
 app.use(express.json());
 app.use(express.static('public')); // Serve static HTML files
 
