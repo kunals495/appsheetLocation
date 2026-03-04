@@ -19,7 +19,7 @@ const APPSHEET_CONFIG = {
 };
 
 // Your deployed HTML page URL
-const HTML_PAGE_URL = 'https://yourdomain.com/location.html';
+const HTML_PAGE_URL = 'https://location-url.vercel.app/';
 
 // WhatsApp API Configuration
 const WHATSAPP_API = {
